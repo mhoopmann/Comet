@@ -97,6 +97,8 @@ static InputType GetInputType(const char *pszFileName)
 
    if (!STRCMP_IGNORE_CASE(pszFileName + iLen - 6, ".mzXML")
          || !STRCMP_IGNORE_CASE(pszFileName + iLen - 5, ".mzML")
+         || !STRCMP_IGNORE_CASE(pszFileName + iLen - 6, ".mzMLb")
+         || !STRCMP_IGNORE_CASE(pszFileName + iLen - 4, ".mz5")
          || !STRCMP_IGNORE_CASE(pszFileName + iLen - 9, ".mzXML.gz")
          || !STRCMP_IGNORE_CASE(pszFileName + iLen - 8, ".mzML.gz"))
 

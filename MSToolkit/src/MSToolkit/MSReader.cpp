@@ -267,6 +267,8 @@ int MSReader::getLastScan(){
   switch (lastFileFormat){
   case mzXML:
   case mzML:
+  case mzMLb:
+  case mz5:
   case mzXMLgz:
   case mzMLgz:
     if (rampFileIn != NULL) return (rampLastScan);
@@ -309,6 +311,7 @@ int MSReader::getPercent(){
   case mzXML:
   case mz5:
   case mzML:
+  case mzMLb:
   case mzXMLgz:
   case mzMLgz:
     if (rampFileIn != NULL){
@@ -646,23 +649,12 @@ bool MSReader::readMGFFile2(const char* c, Spectrum& s){
   }
   if (feof(fileIn)) return false;
 
-  char strTitle[1024];
-  strTitle[0]='\0';
-
   //read spectrum block
   while (!feof(fileIn)){
     if (!fgets(strMGF, 1024, fileIn)) return false;
     if (strlen(strMGF)<2) continue; //skip blank lines
     if (strMGF[0] == '#' || strMGF[0] == ';' || strMGF[0] == '!' || strMGF[0] == '/') continue; //skip comment lines
     tokens.clear();
-    if (strstr(strMGF, "TITLE=")) {
-       strcpy(strTitle, strMGF+6);  // grab full TITLE string for nativeID
-       strTitle[256]='\0';          // setNativeID requires the string to be <= 256
-       if (strTitle[strlen(strTitle)-1]=='\n')
-          strTitle[strlen(strTitle)-1]='\0';
-       if (strTitle[strlen(strTitle)-1]=='\r')
-          strTitle[strlen(strTitle)-1]='\0';
-    }
     tok = strtok(strMGF, "=\n\r");
     while (tok != NULL){
       tokens.push_back(string(tok));
@@ -714,8 +706,8 @@ bool MSReader::readMGFFile2(const char* c, Spectrum& s){
     } else if (tokens[0].find("RTINSECONDS")==0) {
       s.setRTime((float)(atof(tokens[1].c_str()) / 60.0));
     } else if (tokens[0].compare("TITLE")==0) {
-      const char* cc = strTitle;
-      s.setNativeID(cc);
+      for(size_t a=2;a<tokens.size();a++) tokens[1]+='='+tokens[a];
+      s.setNativeID(tokens[1].c_str());
     } else if(isdigit(tokens[0][0])){
       strcpy(str, tokens[0].c_str());
       tok = strtok(str, " \t\n\r");
@@ -1547,6 +1539,7 @@ bool MSReader::readFile(const char* c, Spectrum& s, int scNum){
 	case mz5:
   case mzXML:
 	case mzML:
+  case mzMLb:
 	case mzXMLgz:
 	case mzMLgz:
 		return readMZPFile(c,s,scNum);
@@ -1855,9 +1848,8 @@ bool MSReader::readMZPFile(const char* c, Spectrum& s, int scNum){
 	mzParser::ramp_fileoffset_t indexOffset;
   mzParser::ScanHeaderStruct scanHeader;
   mzParser::RAMPREAL *pPeaks;
-	int i,j,k;
-  double d,d2,d3;
-  int *charges=NULL;
+  mzParser::sPrecursorIon rPI;
+	int i,j;
   bool bFoundSpec=false;
 
 	if(c!=NULL) {
@@ -1977,6 +1969,16 @@ bool MSReader::readMZPFile(const char* c, Spectrum& s, int scNum){
 		s.setMZ(scanHeader.precursorMZ,scanHeader.precursorMonoMZ);
 		s.setCharge(scanHeader.precursorCharge);
     s.setSelWindow(scanHeader.selectionWindowLower,scanHeader.selectionWindowUpper);
+    MSPrecursorInfo pi;
+    pi.mz=scanHeader.precursorMZ;
+    pi.charge=scanHeader.precursorCharge;
+    pi.isoOffsetLower=scanHeader.isolationWindowLower;
+    pi.isoOffsetUpper=scanHeader.isolationWindowUpper;
+    pi.precursorScanNumber=scanHeader.precursorScanNum;
+    if (strcmp(scanHeader.activationMethod, "HCD") == 0) pi.activation = mstHCD;
+    else if (strcmp(scanHeader.activationMethod, "CID") == 0) pi.activation = mstCID;
+    else if (strcmp(scanHeader.activationMethod, "ETD") == 0) pi.activation = mstETD;
+    s.addPrecursor(pi);
 	} else {
 		s.setMZ(0);
     s.setSelWindow(0,0);
@@ -1990,14 +1992,21 @@ bool MSReader::readMZPFile(const char* c, Spectrum& s, int scNum){
     s.addZState(j,scanHeader.precursorMZ*j-(j-1)*1.007276466);
   }
   for(i=1;i<scanHeader.precursorCount;i++){
-    getPrecursor(&scanHeader,i,d,d2,d3,j,k,charges);
-    s.addMZ(d);
-    s.addZState(j, d*j-(j-1)*1.007276466);
-    if(charges!=NULL){
-      delete[] charges;
-      charges=NULL;
-    }
+    getPrecursor(&scanHeader,i,rPI);
+    s.addMZ(rPI.mz);
+    s.addZState(rPI.charge, rPI.mz* rPI.charge -(rPI.charge -1)*1.007276466);
+    MSPrecursorInfo pi;
+    pi.mz = rPI.mz;
+    pi.charge = rPI.charge;
+    pi.isoOffsetLower = rPI.isoLowerOffset;
+    pi.isoOffsetUpper = rPI.isoUpperOffset;
+    pi.precursorScanNumber=scanHeader.precursorScanNum;
+    if(strcmp(scanHeader.activationMethod,"HCD")==0) pi.activation=mstHCD;
+    else if (strcmp(scanHeader.activationMethod, "CID") == 0) pi.activation=mstCID;
+    else if (strcmp(scanHeader.activationMethod, "ETD") == 0) pi.activation = mstETD;
+    s.addPrecursor(pi);
   }
+
   //store the spectrum
 	pPeaks = readPeaks(rampFileIn, pScanIndex[rampIndex],rampIndex);
 	j=0;
@@ -2007,7 +2016,7 @@ bool MSReader::readMZPFile(const char* c, Spectrum& s, int scNum){
 	}
   lastReadScanNum = scanHeader.acquisitionNum;
 
-	free(pPeaks);
+	//free(pPeaks);  //don't clean this up anymore. will get cleaned up in the RAMPFILE struct
 	return true;
 
 }
@@ -2385,7 +2394,6 @@ MSFileFormat MSReader::checkFileFormat(const char *fn){
 
   size_t i;
 	char ext[32];
-	char tmp[1024];
 	char* c;
 
 	//extract extension & capitalize
@@ -2406,11 +2414,17 @@ MSFileFormat MSReader::checkFileFormat(const char *fn){
   if(strcmp(ext,".MSMAT")==0 ) return msmat_ff;
   if(strcmp(ext,".RAW")==0 ) return raw;
   if(strcmp(ext,".MZXML")==0 ) return mzXML;
-  if(strcmp(ext,".MZ5")==0 ) {
-    cerr << "MZ5 format is no longer supported." << endl;
+#ifdef MZP_HDF
+  if(strcmp(ext,".MZ5")==0 ) return mz5;
+  if (strcmp(ext, ".MZMLB") == 0) return mzMLb;
+#else
+  if (strcmp(ext, ".MZ5") == 0 || strcmp(ext, ".MZMLB") == 0) {
+    cerr << "mz5 and mzMLb formats require MSToolkit to be compiled with 'MZP_HDF'. Please recompile with correct flag." << endl;
     return dunno;
   }
+#endif
 	if(strcmp(ext,".MZML")==0 ) return mzML;
+  if(strcmp(ext,".MZMLB")==0 ) return mzMLb;
   if(strcmp(ext,".MGF")==0 ) return mgf;
 	//add the sqlite3 format
   if(strcmp(ext,".SQLITE3")==0 ) return sqlite;
@@ -2418,6 +2432,7 @@ MSFileFormat MSReader::checkFileFormat(const char *fn){
 	
 	if(strcmp(ext,".GZ")==0 ) {
 		i=c-fn;
+    char tmp[1024];
 		strncpy(tmp,fn,i);
 		tmp[i]='\0';
 		c=strrchr(tmp,'.');

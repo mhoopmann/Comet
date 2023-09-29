@@ -103,6 +103,7 @@ private:
   MSSpectrumType	evaluateFilter(long scan, char* chFilter, std::vector<double>& MZs, bool& bCentroid, double& cv, MSActivation& act);
   double          evaluateTrailerDouble(const char* id);
   int             evaluateTrailerInt(const char* id);
+  std::string     evaluateTrailerString(const char* id);
 	bool						initRaw();
   
 

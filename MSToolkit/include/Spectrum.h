@@ -42,6 +42,7 @@ class Spectrum {
   void            addEZState(int,double,float,float);
   void            addEZState(EZState&);
 	void						addMZ(double, double mono=0);
+  void            addPrecursor(MSPrecursorInfo&);
   void            addSPS(double);
   void    				addZState(int,double);
   void		    		addZState(ZState&);
@@ -79,9 +80,11 @@ class Spectrum {
   double    			getMonoMZ(int index=0);
   double    			getMZ(int index=0);
   bool            getNativeID(char*,int);
+  MSPrecursorInfo getPrecursor(int index=0);
   bool            getRawFilter(char*,int,bool bLock=false);
   float		    		getRTime();
   float           getRTimeApex();
+  std::string     getScanDescription();
   int	      			getScanNumber(bool second=false);
   double          getScanWindowLower();
   double          getScanWindowUpper();
@@ -111,6 +114,7 @@ class Spectrum {
   void            setRawFilter(char*);
   void				    setRTime(float);
   void            setRTimeApex(float);
+  void            setScanDescription(std::string);
   void    				setScanNumber(int, bool second=false);
   void            setScanWindow(double lower, double upper); //the mass range of the spectrum
   void            setSelWindow(double lower, double upper); //the mass range of the selected/acquired ions
@@ -120,6 +124,7 @@ class Spectrum {
   int             sizeEZ();
 	int							sizeMZ();   //also returns size of monoMZ
   int             sizeSPS();
+  int             sizePrecursor();
   int     				sizeZ();
   void		    		sortIntensity();
   void				    sortIntensityRev();
@@ -152,6 +157,7 @@ class Spectrum {
   int              msLevel;
   std::vector<double>   *monoMZ;     //the monoisotopic m/z of the selected ion(s)
   std::vector<double>   *mz;         //the selected ion(s) in m/z
+  std::vector<MSPrecursorInfo> *precursor;
   std::vector<double>   *sps;        //SPS masses
   std::string      fileID;
   MSSpectrumType   fileType;
@@ -177,6 +183,7 @@ class Spectrum {
   int              centroidStatus;  //0=profile, 1=centroid, 2=unknown
   double           scanWinLower;    //the instrument spectrum m/z range
   double           scanWinUpper;    //the instrument spectrum m/z range
+  std::string      scanDescription;
 
   //private:
   //Functions
