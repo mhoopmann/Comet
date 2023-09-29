@@ -523,8 +523,15 @@ static bool ValidateSequenceDatabaseFile()
    }
 
    // At this point, check extension to set whether index database or not
-   if (!strcmp(g_staticParams.databaseInfo.szDatabase+strlen(g_staticParams.databaseInfo.szDatabase)-4, ".idx"))
+   if (!strcmp(g_staticParams.databaseInfo.szDatabase + strlen(g_staticParams.databaseInfo.szDatabase) - 4, ".idx"))
+   {
       g_staticParams.bIndexDb = 1;
+
+      // if searching fragment index database, limit load of query spectra as no
+      // need to load all spectra into memory since querying spectra sequentially
+      if (g_staticParams.options.iSpectrumBatchSize > 2000 || g_staticParams.options.iSpectrumBatchSize == 0)
+         g_staticParams.options.iSpectrumBatchSize = 2000;
+   }
 
    if (g_staticParams.options.bCreateIndex && g_staticParams.bIndexDb)
    {
@@ -945,6 +952,12 @@ bool CometSearchManager::InitializeStaticParams()
 
    if (GetParamValue("add_Z_user_amino_acid", dDoubleData))
       g_staticParams.staticModifications.pdStaticMods[(int)'Z'] = dDoubleData;
+
+   if (GetParamValue("min_fragmentindex_mass", dDoubleData))
+      g_staticParams.options.dMinFragIndexMass = dDoubleData;
+
+   if (GetParamValue("max_fragmentindex_mass", dDoubleData))
+      g_staticParams.options.dMaxFragIndexMass = dDoubleData;
 
    GetParamValue("num_enzyme_termini", g_staticParams.options.iEnzymeTermini);
    if ((g_staticParams.options.iEnzymeTermini != 1)
@@ -1754,11 +1767,6 @@ bool CometSearchManager::DoSearch()
 
    bool bSucceeded = true;
 
-   // if searching fragment index database, limit load of query spectra as no
-   // need to load all spectra into memory since querying spectra sequentially
-   if (g_staticParams.bIndexDb && g_staticParams.options.iSpectrumBatchSize > 2000)
-      g_staticParams.options.iSpectrumBatchSize = 2000;
-
    // add git hash to version string if present
    // repeated here from Comet main() as main() is skipped when search invoked via DLL
    if (strlen(GITHUBSHA) > 0)
@@ -2270,7 +2278,6 @@ bool CometSearchManager::DoSearch()
          {
             logout("   - Reading all spectra into memory; set \"spectrum_batch_size\" if search terminates here.\n");
             fflush(stdout);
-
          }
 
          CometFragmentIndex sqSearch;
@@ -2434,6 +2441,7 @@ bool CometSearchManager::DoSearch()
 
             g_massRange.dMinMass = g_pvQuery.at(0)->_pepMassInfo.dPeptideMassToleranceMinus;
             g_massRange.dMaxMass = g_pvQuery.at(g_pvQuery.size()-1)->_pepMassInfo.dPeptideMassTolerancePlus;
+
             if (g_massRange.dMaxMass - g_massRange.dMinMass > g_massRange.dMinMass)
                g_massRange.bNarrowMassRange = true;
             else
@@ -2788,12 +2796,11 @@ bool CometSearchManager::InitializeSingleSpectrumSearch()
    if (!ValidateSequenceDatabaseFile())
       return false;
 
-   // this uses a single thread
-   singleSearchThreadCount = 1;
-   g_staticParams.options.iNumThreads = singleSearchThreadCount;
-
    g_staticParams.precalcMasses.iMinus17 = BIN(g_staticParams.massUtility.dH2O);
    g_staticParams.precalcMasses.iMinus18 = BIN(g_staticParams.massUtility.dNH3);
+
+   g_massRange.dMinMass = g_staticParams.options.dPeptideMassLow;
+   g_massRange.dMaxMass = g_staticParams.options.dPeptideMassHigh;
 
    bool bSucceeded;
    //MH: Allocate memory shared by threads during spectral processing.
@@ -2810,15 +2817,13 @@ bool CometSearchManager::InitializeSingleSpectrumSearch()
    tp->fillPool(g_staticParams.options.iNumThreads < 0 ? 0 : g_staticParams.options.iNumThreads - 1);
 
    // Load databases
-   if (!g_vFragmentIndexRead)
-   {
-      CometFragmentIndex::ReadFragmentIndex(tp);
-      g_vFragmentIndexRead = true;
-   }
+   CometFragmentIndex sqSearch;
    if (!g_vPlainPeptideIndexRead)
    {
-      CometFragmentIndex::ReadPlainPeptideIndex();
+      sqSearch.ReadPlainPeptideIndex();
       g_vPlainPeptideIndexRead = true;
+
+      sqSearch.CreateFragmentIndex(tp);
    }
 
    // open FASTA for retrieving protein names
@@ -2836,6 +2841,7 @@ bool CometSearchManager::InitializeSingleSpectrumSearch()
    }
 
    singleSearchInitializationComplete = true;
+
    return true;
 }
 
@@ -2895,6 +2901,7 @@ bool CometSearchManager::DoSingleSpectrumSearch(int iPrecursorCharge,
    // or we will create a memory leak!
 
    int iArraySize = (int)((g_staticParams.options.dPeptideMassHigh + g_staticParams.tolerances.dInputTolerancePlus + 2.0) * g_staticParams.dInverseBinWidth);
+
    double *pdTmpSpectrum = new double[iArraySize];  // use this to determine most intense b/y-ions masses to report back
    bool bSucceeded = CometPreprocess::PreprocessSingleSpectrum(iPrecursorCharge, dMZ, pdMass, pdInten, iNumPeaks, pdTmpSpectrum);
    int iSize;
@@ -2908,20 +2915,20 @@ bool CometSearchManager::DoSingleSpectrumSearch(int iPrecursorCharge,
       delete[] pdTmpSpectrum;
       return false; // no search to run
    }
-
    bSucceeded = AllocateResultsMem();
 
    if (!bSucceeded)
       goto cleanup_results;
 
    g_massRange.dMinMass = g_pvQuery.at(0)->_pepMassInfo.dPeptideMassToleranceMinus;
-   g_massRange.dMaxMass = g_pvQuery.at(g_pvQuery.size()-1)->_pepMassInfo.dPeptideMassTolerancePlus;
+   g_massRange.dMaxMass = g_pvQuery.at(g_pvQuery.size() - 1)->_pepMassInfo.dPeptideMassTolerancePlus;
 
    if (g_massRange.dMaxMass - g_massRange.dMinMass > g_massRange.dMinMass)
       g_massRange.bNarrowMassRange = true;  // unused in this context but setting here anyways
    else
       g_massRange.bNarrowMassRange = false;
 
+/*
    // add git hash to version string if present
    // repeated here from Comet main() as main() is skipped when search invoked via DLL
    if (strlen(GITHUBSHA) > 0)
@@ -2933,11 +2940,14 @@ bool CometSearchManager::DoSingleSpectrumSearch(int iPrecursorCharge,
    }
    else
       g_sCometVersion = comet_version;
+*/
+   g_sCometVersion = comet_version;
 
    // Now that spectra are loaded to memory and sorted, do search.
    bSucceeded = CometSearch::RunSearch(tp);
 
    iSize = g_pvQuery.at(0)->iMatchPeptideCount;
+
    if (iSize > g_staticParams.options.iNumStored)
       iSize = g_staticParams.options.iNumStored;
 
