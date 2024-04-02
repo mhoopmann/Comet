@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #ifndef _COMETDATAINTERNAL_H_
 #define _COMETDATAINTERNAL_H_
@@ -40,15 +31,19 @@ class CometSearchManager;
 #define MAX_PEPTIDE_LEN             51       // max # of AA for a peptide; one more than actual # to account for terminating char
 #define MAX_PEPTIDE_LEN_P2          53       // max # of AA for a peptide plus 2 for N/C-term
 
-#define MIN_FRAGINDEX_MASS          180.0
-#define MAX_FRAGINDEX_MASS          2500.0
+#define FRAGINDEX_MIN_MATCHEDIONS   3
+#define FRAGINDEX_MIN_MASS          200.0    // minimum fragment ion mass used to generate fragment index
+#define FRAGINDEX_MAX_MASS          2000.0   // maximum fragment ion mass used to generate fragment index
+#define FRAGINDEX_MAX_THREADS       16       // not sure it makes sense to set this max limit
+#define FRAGINDEX_MAX_BATCHSIZE     2000     // maximum number of spectra loaded when querying fragment index
+#define FRAGINDEX_MAX_NUMPEAKS      150      // number of spectrum peaks used to query fragment index
+#define FRAGINDEX_MAX_NUMSCORED     100      // for each fragment index spectrum query, score up to this many peptides
+#define FRAGINDEX_MAX_COMBINATIONS  2000
+#define FRAGINDEX_MAX_MODS_PER_PEP  5
+#define FRAGINDEX_KEEP_ALL_PEPTIDES 1        // 1 = consider up to FRAGINDEX_MAX_COMBINATIONS of peptides; 0 = ignore all mods for peptide that exceed FRAGINDEX_MAX_COMBINATIONS
+#define FRAGINDEX_PRECURSORBINS     300      // bins for precursors, mass range of each bin will be (max_mass - min_mass)/FRAGINDEX_PRECURSORBINS
 
-#define MAX_COMBINATIONS            2000
-#define MAX_MODS_PER_MOD            3
-
-#define MAX_FRAGMENTINDEX_THREADS   8
-
-#define KEEP_ALL_PEPTIDES           1        // 1 = print up to MAX_COMBINATIONS of peptides; 0 = ignore mods for peptide that exceed MAX_COMBINATIONS
+#define UNSET_TOLERANCE_MINUS       -99999.9 // default peptide_mass_tolerance_lower value; if this is not changed/set, use -(peptide_mass_tolerance)
 
 #define MAX_PEFFMOD_LEN             16
 #define SIZE_MASS                   128      // ascii value size
@@ -61,7 +56,7 @@ class CometSearchManager;
 #define WIDTH_REFERENCE             512      // length of the protein accession field to store
 #define MAX_PROTEINS                50       // maximum number of proteins to return for each query; for index search only right now
 
-#define HISTO_SIZE                  152      // some number greater than 150; chose 152 for byte alignment?
+#define HISTO_SIZE                  152      // some number greater than 150
 
 #define NO_PEFF_VARIANT             -127
 
@@ -118,6 +113,7 @@ struct Options             // output parameters
    int iRemovePrecursor;         // 0=no, 1=yes, 2=ETD precursors, 3=phosphate neutral loss
    int iDecoySearch;             // 0=no, 1=concatenated search, 2=separate decoy search
    int iNumThreads;              // 0=poll CPU else set # threads to spawn
+   int iNumFragmentThreads;      // # threads used for fragment indexing
    int bResolveFullPaths;        // 0=do not resolve full paths; 1=resolve paths (default)
    int bOutputSqtStream;
    int bOutputSqtFile;
@@ -143,6 +139,10 @@ struct Options             // output parameters
    int bCorrectMass;             // use selectionMZ instead of monoMZ if monoMZ is outside selection window
    int bTreatSameIL;
    int iMaxIndexRunTime;         // max run time of index search in milliseconds
+   int iFragIndexNumThreads;
+   int iFragIndexMinMatchedIons;
+   int iFragIndexNumSpectrumPeaks;
+   int iFragIndexMaxNumScored;
    long lMaxIterations;          // max # of modification permutations for each iStart position
    double dMinIntensity;         // intensity cutoff for each peak
    double dMinPercentageIntensity;  // intensity cutoff for each peak as % of base peak
@@ -150,8 +150,8 @@ struct Options             // output parameters
    double dPeptideMassLow;       // MH+ mass
    double dPeptideMassHigh;      // MH+ mass
    double dMinimumXcorr;         // set the minimum xcorr to report (default is 1e-8)
-   double dMaxFragIndexMass;     // maximum fragment index fragment mass
-   double dMinFragIndexMass;     // minimum fragment index fragment mass
+   double dFragIndexMaxMass;     // fragment index maximum fragment mass
+   double dFragIndexMinMass;     // fragment index minimum fragment mass
    IntRange scanRange;
    IntRange peptideLengthRange;
    DoubleRange clearMzRange;
@@ -206,12 +206,17 @@ struct Options             // output parameters
       dPeptideMassLow = a.dPeptideMassLow;
       dPeptideMassHigh = a.dPeptideMassHigh;
       dMinimumXcorr = a.dMinimumXcorr;
-      dMaxFragIndexMass = a.dMaxFragIndexMass;
-      dMinFragIndexMass = a.dMinFragIndexMass;
       scanRange = a.scanRange;
       peptideLengthRange = a.peptideLengthRange;
       clearMzRange = a.clearMzRange;
       strcpy(szActivationMethod, a.szActivationMethod);
+
+      dFragIndexMinMass = a.dFragIndexMinMass;                    // smallest fragment mass in fragment index
+      dFragIndexMaxMass = a.dFragIndexMaxMass;                    // largest fragment mass in fragment index
+      iFragIndexNumThreads = a.iFragIndexNumThreads;              // # of threads to use for fragment index (as not sure humongous # makes sense)
+      iFragIndexMinMatchedIons = a.iFragIndexMinMatchedIons;      // minimum # of matched fragment ions peaks required to pass to xcorr
+      iFragIndexNumSpectrumPeaks = a.iFragIndexNumSpectrumPeaks;  // # of peaks from spectrum to use for querying fragment index
+      iFragIndexMaxNumScored = a.iFragIndexMaxNumScored;          // maximum # of peptides passed to xcorr for a spectrum
 
       return *this;
    }
@@ -236,7 +241,8 @@ struct Results
    double pdVarModSites[MAX_PEPTIDE_LEN_P2];   // store variable mods mass diffs, +2 to accomodate N/C-term
    char   pszMod[MAX_PEPTIDE_LEN][MAX_PEFFMOD_LEN];    // store PEFF mod string
    char   szPeptide[MAX_PEPTIDE_LEN];
-   char   szPrevNextAA[2];                    // [0] stores prev AA, [1] stores next AA
+   char   cPrevAA;                            // stores prev flanking AA
+   char   cNextAA;                            // stores following flanking AA
    bool   bClippedM;                          // true if new N-term protein due to clipped methionine
    string strSingleSearchProtein;             // used only in single spectrum search to return protein name from index file
    string sPeffOrigResidues;                  // original residue(s) of a PEFF variant
@@ -277,7 +283,7 @@ struct MassRange
    double dMaxMass;
    int    iMaxFragmentCharge;  // global maximum fragment charge
    bool   bNarrowMassRange;    // used to determine how to parse peptides in SearchForPeptides
-   unsigned int g_uiMaxFragmentArrayIndex; // BIN(dMaxFragIndexMass); used as fragment array index
+   unsigned int g_uiMaxFragmentArrayIndex; // BIN(dFragIndexMaxMass); used as fragment array index
 };
 
 extern MassRange g_massRange;
@@ -406,12 +412,12 @@ struct DBInfo
    }
 };
 
-// will need to retire this soon as it's a duplicate of PlainPeptideIndex
-// now that mods aren't stored
+// this duplicates PlainPeptideIndex but with fixed peptide char string for simplified binary write/read
 struct DBIndex
 {
    char   szPeptide[MAX_PEPTIDE_LEN];
-   char   szPrevNextAA[2];
+   char   cPrevAA;
+   char   cNextAA;
    char   pcVarModSites[MAX_PEPTIDE_LEN_P2]; // encodes 0-9 indicating which var mod at which position
    comet_fileoffset_t   lIndexProteinFilePosition;         // points to entry in g_pvProteinsList
    double dPepMass;                          // MH+ pep mass
@@ -451,7 +457,8 @@ struct DBIndex
 struct PlainPeptideIndex
 {
    string sPeptide;
-   char   szPrevNextAA[2];
+   char   cPrevAA;
+   char   cNextAA;
    comet_fileoffset_t   lIndexProteinFilePosition;  // points to entry in g_pvProteinsList
    double dPepMass;                                 // MH+ pep mass, unmodified mass; modified mass in FragmentPeptidesStruct
 
@@ -478,9 +485,11 @@ struct FragmentPeptidesStruct
    }
 };
 
-extern vector<unsigned int>* g_arrvFragmentIndex[8];       // array of vectors: [Index/thread/max8][BIN(fragment mass)][which entries in g_vFragmentPeptides]
+extern unsigned int** g_iFragmentIndex[FRAGINDEX_MAX_THREADS][FRAGINDEX_PRECURSORBINS];           // 4D array [thread][precursor_mass][BIN[fragment mass)][which entries in g_vFragmentPeptides]
+extern unsigned int* g_iCountFragmentIndex[FRAGINDEX_MAX_THREADS][FRAGINDEX_PRECURSORBINS];       // array of ints: [thread][precursor_mass][BIN(fragment mass)][which entries in g_vFragmentPeptides]
 extern vector<struct FragmentPeptidesStruct> g_vFragmentPeptides;
 extern vector<PlainPeptideIndex> g_vRawPeptides;
+extern bool *g_bIndexPrecursors;     // allocate an array of BIN(max_precursor, protonated) and use a bool to indicate if that precursor is present in input file(s)
 
 
 struct IndexProteinStruct  // for indexed database
@@ -544,6 +553,8 @@ struct VarModParams
 {
    bool    bVarModSearch;            // set to true if variable mods are specified
    bool    bVarTermModSearch;        // set to true if any n-term/c-term variable mods are specified
+   bool    bVarProteinNTermMod;      // set to true if a protein n-term variable mod specified
+   bool    bVarProteinCTermMod;      // set to true if a protein c-term variable mod specified 
    bool    bBinaryModSearch;         // set to true if any of the variable mods are of binary mod variety
    bool    bUseFragmentNeutralLoss;  // set to true if any custom NL is set; applied only to 1+ and 2+ fragments
    int     iRequireVarMod;           // 0=no; else use bits to determine which varmods are required
@@ -556,6 +567,8 @@ struct VarModParams
    {
       bVarModSearch = a.bVarModSearch;
       bVarTermModSearch = a.bVarTermModSearch;
+      bVarProteinNTermMod = a.bVarProteinNTermMod;
+      bVarProteinCTermMod = a.bVarProteinCTermMod;
       iMaxVarModPerPeptide = a.iMaxVarModPerPeptide;
       iMaxPermutations = a.iMaxPermutations;
       bUseFragmentNeutralLoss = a.bUseFragmentNeutralLoss;
@@ -583,6 +596,7 @@ struct MassUtil
    double dOH2parent;
    double pdAAMassParent[SIZE_MASS];
    double pdAAMassFragment[SIZE_MASS];
+   double pdAAMassUser[SIZE_MASS];       // user defined default amino acid masses
 
    MassUtil& operator=(MassUtil& a)
    {
@@ -600,6 +614,7 @@ struct MassUtil
       {
          pdAAMassParent[i] = a.pdAAMassParent[i];
          pdAAMassFragment[i] = a.pdAAMassFragment[i];
+         pdAAMassUser[i] = a.pdAAMassUser[i];
       }
 
       return *this;
@@ -627,20 +642,6 @@ struct ToleranceParams
       dFragmentBinSize = a.dFragmentBinSize;
       dFragmentBinStartOffset = a.dFragmentBinStartOffset;
       dMatchPeakTolerance = a.dMatchPeakTolerance;
-
-      return *this;
-   }
-};
-
-struct PeaksInfo
-{
-   int iNumMatchPeaks;
-   int iNumAllowedMatchPeakErrors;
-
-   PeaksInfo& operator=(PeaksInfo& a)
-   {
-      iNumMatchPeaks = a.iNumMatchPeaks;
-      iNumAllowedMatchPeakErrors = a.iNumAllowedMatchPeakErrors;
 
       return *this;
    }
@@ -697,7 +698,6 @@ struct StaticParams
    MassUtil        massUtility;
    double          dInverseBinWidth;    // this is used in BIN() many times so use inverse binWidth to do multiply vs. divide
    double          dOneMinusBinOffset;  // this is used in BIN() many times so calculate once
-   PeaksInfo       peaksInformation;
    IonInfo         ionInformation;
    int             iXcorrProcessingOffset;
    int             bIndexDb;            // 0 = normal fasta; 1 = indexed database
@@ -705,9 +705,7 @@ struct StaticParams
    vector<double>  precursorNLIons;
    int             iPrecursorNLSize;
    int             iOldModsEncoding;
-   char            szDIAWindowsFile[SIZE_FILE];
    bool            bSkipToStartScan;
-   std::chrono::high_resolution_clock::time_point tRealTimeStart;     // track run time of real-time index search
 
    StaticParams()
    {
@@ -743,7 +741,6 @@ struct StaticParams
        dInverseBinWidth = a.dInverseBinWidth;
        dOneMinusBinOffset = a.dOneMinusBinOffset;
        iXcorrProcessingOffset = a.iXcorrProcessingOffset;
-       peaksInformation = a.peaksInformation;
        ionInformation = a.ionInformation;
        return *this;
    }
@@ -768,13 +765,13 @@ struct StaticParams
       peffInfo.szPeffOBO[0] = '\0';
       peffInfo.iPeffSearch = 0;
 
-      szDIAWindowsFile[0]='\0';
       iPrecursorNLSize = 0;
 
       for (i = 0; i < SIZE_MASS; ++i)
       {
          massUtility.pdAAMassParent[i] = 999999.;
          massUtility.pdAAMassFragment[i] = 999999.;
+         massUtility.pdAAMassUser[i] = 0.0;
          staticModifications.pdStaticMods[i] = 0.0;
       }
 
@@ -868,7 +865,8 @@ struct StaticParams
       options.bCreateIndex = 0;
       options.bVerboseOutput = 0;
       options.iDecoySearch = 0;
-      options.iNumThreads = 0;
+      options.iNumThreads = 4;
+      options.iNumFragmentThreads = 4;
       options.bClipNtermMet = 0;
       options.bClipNtermAA = 0;
       options.bPinModProteinDelim = 0;
@@ -890,10 +888,18 @@ struct StaticParams
       options.dPeptideMassLow = 600.0;
       options.dPeptideMassHigh = 8000.0;
       options.dMinimumXcorr = XCORR_CUTOFF;
-      options.dMaxFragIndexMass = MAX_FRAGINDEX_MASS;
-      options.dMinFragIndexMass = MIN_FRAGINDEX_MASS;
+      options.dFragIndexMaxMass = FRAGINDEX_MAX_MASS;
+      options.dFragIndexMinMass = FRAGINDEX_MIN_MASS;
       strcpy(options.szActivationMethod, "ALL");
       // End of mzXML specific parameters.
+
+
+      options.dFragIndexMinMass = FRAGINDEX_MIN_MASS;
+      options.dFragIndexMaxMass = FRAGINDEX_MAX_MASS;
+      options.iFragIndexNumThreads = FRAGINDEX_MAX_THREADS;
+      options.iFragIndexMinMatchedIons = FRAGINDEX_MIN_MATCHEDIONS;
+      options.iFragIndexNumSpectrumPeaks = FRAGINDEX_MAX_NUMPEAKS;
+      options.iFragIndexMaxNumScored = FRAGINDEX_MAX_NUMSCORED;
 
       options.clearMzRange.dStart = 0.0;
       options.clearMzRange.dEnd = 0.0;
@@ -909,7 +915,7 @@ struct StaticParams
       tolerances.iMassToleranceUnits = 0;
       tolerances.iMassToleranceType = 0;
       tolerances.iIsotopeError = 0;
-      tolerances.dInputToleranceMinus = -3.0;               // peptide_mass_tolerance minus
+      tolerances.dInputToleranceMinus = UNSET_TOLERANCE_MINUS;       // peptide_mass_tolerance minus
       tolerances.dInputTolerancePlus = 3.0;                 // peptide_mass_tolerance plus
       tolerances.dFragmentBinSize = 1.0005;
       tolerances.dFragmentBinStartOffset = 0.4;
@@ -920,8 +926,6 @@ struct StaticParams
 };
 
 extern StaticParams    g_staticParams;
-
-extern vector<double>  g_pvDIAWindows;    // vector of start-end masses for DIA window; even number start mass, odd number end mass
 
 extern string g_psGITHUB_SHA;             // grab the GITHUB_SHA environment variable and trim to 7 chars; null if environment variable not present
 
@@ -949,8 +953,8 @@ extern int* MOD_SEQ_MOD_NUM_CNT;   // Total modifications numbers for a modifiab
 extern int* PEPTIDE_MOD_SEQ_IDXS;
 
 extern int MOD_NUM;
-extern bool g_vFragmentIndexRead;       // set to true when fragment index file is read
-extern bool g_vPlainPeptideIndexRead;   // set to true if plain peptide index file is read
+extern bool g_bFragmentIndexRead;       // set to true when fragment index file is read
+extern bool g_bPlainPeptideIndexRead;   // set to true if plain peptide index file is read
 
 // Query stores information for peptide scoring and results
 // This struct is allocated for each spectrum/charge combination
@@ -965,11 +969,8 @@ struct Query
 
    short siMaxXcorr;        // index of maximum correlation score in iXcorrHistogram
 
-   short siLowestSpScoreIndex;
-   short siLowestDecoySpScoreIndex;
-
-   float fLowestSpScore;
-   float fLowestDecoySpScore;
+   short siLowestXcorrScoreIndex;
+   short siLowestDecoyXcorrScoreIndex;
 
    double dLowestXcorrScore;
    double dLowestDecoyXcorrScore;
@@ -1017,11 +1018,8 @@ struct Query
       fPar[3]=0.0;
 
       siMaxXcorr = 0;                        // index of maximum correlation score in iXcorrHistogram
-      siLowestSpScoreIndex = 0;
-      siLowestDecoySpScoreIndex = 0;
-
-      fLowestSpScore = 0.0;
-      fLowestDecoySpScore = 0.0;
+      siLowestXcorrScoreIndex = 0;
+      siLowestDecoyXcorrScoreIndex = 0;
 
       dLowestXcorrScore = XCORR_CUTOFF;
       dLowestDecoyXcorrScore = XCORR_CUTOFF;

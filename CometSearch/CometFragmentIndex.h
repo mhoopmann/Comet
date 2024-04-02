@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #ifndef _COMETFRAGMENTINDEX_H_
 #define _COMETFRAGMENTINDEX_H_
@@ -37,36 +28,31 @@ public:
    ~CometFragmentIndex();
 
    static bool WritePlainPeptideIndex(ThreadPool *tp);
-   static bool WriteFragmentIndex(string strIndexFile,
-                                  comet_fileoffset_t lPeptidesFilePos,
-                                  comet_fileoffset_t lProteinsFilePos,
-                                  ThreadPool *tp);
-   static bool ReadFragmentIndex(ThreadPool *tp);
    static bool ReadPlainPeptideIndex(void);
    static bool CreateFragmentIndex(ThreadPool *tp);
    static string ElapsedTime(std::chrono::time_point<std::chrono::steady_clock> tStartTime);
+   static int WhichPrecursorBin(double dMass);
 
 private:
 
    static void PermuteIndexPeptideMods(vector<PlainPeptideIndex>& vRawPeptides);
-   static void GenerateFragmentIndex(vector<PlainPeptideIndex>& vRawPeptides,
-                              ThreadPool *tp);
+   static void GenerateFragmentIndex(ThreadPool *tp);
    static void AddFragments(vector<PlainPeptideIndex>& vRawPeptides,
                             int iWhichThread,
                             int iWhichPeptide,
                             int modNumIdx,
                             short siNtermMod,
-                            short siCtermMod);
-   static void AddFragmentsThreadProc(vector<PlainPeptideIndex>& vRawPeptides,
-                                      int iWhichThread,
+                            short siCtermMod,
+                            bool bCountOnly);
+   static void AddFragmentsThreadProc(int iWhichThread,
                                       int iNumIndexingThreads,
-                                      int& iNoModificationNumbers,
+                                      bool bCountOnly,
                                       ThreadPool *tp);
    static bool SortFragmentsByPepMass(unsigned int x,
                                       unsigned int y);
-   static void SortFragmentThreadProc(int i,
+   static void SortFragmentThreadProc(int iWhichThread,
                                       int iNumIndexingThreads,
-                                      ThreadPool *tp);
+                                      ThreadPool* tp);
    static bool CompareByPeptide(const DBIndex &lhs,
                                 const DBIndex &rhs);
    static bool CompareByMass(const DBIndex &lhs,
@@ -80,7 +66,6 @@ private:
    static bool *_pbSearchMemoryPool;    // Pool of memory to be shared by search threads
    static bool **_ppbDuplFragmentArr;   // Number of arrays equals number of threads
 
-   static Mutex _vFragmentIndexMutex;
    static Mutex _vFragmentPeptidesMutex;
 };
 

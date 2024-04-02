@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include "Common.h"
 #include "CometDataInternal.h"
@@ -173,7 +164,7 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
          fprintf(fpout, "%s\t", pOutput[iWhichResult].szPeptide);
 
          // modified peptide
-         fprintf(fpout, "%c.", pOutput[iWhichResult].szPrevNextAA[0]);
+         fprintf(fpout, "%c.", pOutput[iWhichResult].cPrevAA);
 
          bool bNterm = false;
          bool bCterm = false;
@@ -207,7 +198,7 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
          if (bCterm)
             fprintf(fpout, "c[%0.4f]", dCterm);
 
-         fprintf(fpout, ".%c\t", pOutput[iWhichResult].szPrevNextAA[1]);
+         fprintf(fpout, ".%c\t", pOutput[iWhichResult].cNextAA);
 
          // prints modification encoding
          PrintModifications(fpout, pOutput, iWhichResult);
@@ -217,7 +208,7 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
          PrintProteins(fpout, fpdb, iWhichQuery, iWhichResult, iPrintTargetDecoy, &iNumTotProteins);
 
          // Cleavage type
-         fprintf(fpout, "\t%c%c\t", pOutput[iWhichResult].szPrevNextAA[0], pOutput[iWhichResult].szPrevNextAA[1]);
+         fprintf(fpout, "\t%c%c\t", pOutput[iWhichResult].cPrevAA, pOutput[iWhichResult].cNextAA);
 
          // e-value
          fprintf(fpout, "%0.2E\n", pOutput[iWhichResult].dExpect);
@@ -327,7 +318,7 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
          }
 
          // generate modified_peptide string
-         fprintf(fpout, "%c.", pOutput[iWhichResult].szPrevNextAA[0]);
+         fprintf(fpout, "%c.", pOutput[iWhichResult].cPrevAA);
          if (bNterm)
             fprintf(fpout, "n[%0.4f]", dNterm);
          for (int i=0; i<pOutput[iWhichResult].iLenPeptide; ++i)
@@ -340,12 +331,12 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
          if (bCterm)
             fprintf(fpout, "c[%0.4f]", dCterm);
 
-         fprintf(fpout, ".%c\t", pOutput[iWhichResult].szPrevNextAA[1]);
+         fprintf(fpout, ".%c\t", pOutput[iWhichResult].cNextAA);
 
          // mod string with PEFF
          if (g_staticParams.peffInfo.iPeffSearch)
          {
-            fprintf(fpout, "%c.", pOutput[iWhichResult].szPrevNextAA[0]);
+            fprintf(fpout, "%c.", pOutput[iWhichResult].cPrevAA);
             if (bNterm)
                fprintf(fpout, "n[%0.4f]", dNterm);
             for (int i=0; i<pOutput[iWhichResult].iLenPeptide; ++i)
@@ -360,11 +351,11 @@ void CometWriteTxt::PrintResults(int iWhichQuery,
             if (bCterm)
                fprintf(fpout, "c[%0.4f]", dCterm);
 
-            fprintf(fpout, ".%c\t", pOutput[iWhichResult].szPrevNextAA[1]);
+            fprintf(fpout, ".%c\t", pOutput[iWhichResult].cNextAA);
          }
 
-         fprintf(fpout, "%c\t", pOutput[iWhichResult].szPrevNextAA[0]);
-         fprintf(fpout, "%c\t", pOutput[iWhichResult].szPrevNextAA[1]);
+         fprintf(fpout, "%c\t", pOutput[iWhichResult].cPrevAA);
+         fprintf(fpout, "%c\t", pOutput[iWhichResult].cNextAA);
 
          size_t iNumTotProteins = 0;
 
@@ -446,7 +437,7 @@ void CometWriteTxt::PrintModifications(FILE *fpout,
 
    // static N-terminus protein
    if (!isEqual(g_staticParams.staticModifications.dAddNterminusProtein, 0.0)
-         && pOutput[iWhichResult].szPrevNextAA[0] == '-')
+         && pOutput[iWhichResult].cPrevAA == '-')
    {
       if (!bFirst)
          fprintf(fpout, ", ");
@@ -522,7 +513,7 @@ void CometWriteTxt::PrintModifications(FILE *fpout,
 
    // static C-terminus protein
    if (!isEqual(g_staticParams.staticModifications.dAddCterminusProtein, 0.0)
-         && pOutput[iWhichResult].szPrevNextAA[1] == '-')
+         && pOutput[iWhichResult].cNextAA == '-')
    {
       if (!bFirst)
          fprintf(fpout, ",");

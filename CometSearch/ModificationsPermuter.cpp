@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include <iostream>
 #include <fstream>
@@ -49,11 +40,11 @@ ModificationsPermuter::~ModificationsPermuter()
 //bool DEBUG = false;
 
 // Maximum number of bits that can be set in a modifiable sequence for a given modification.
-// C(25, 5) = 53,130; C(25, 4) = 10,650; C(25, 3) = 2300.  This is more than MAX_COMBINATIONS (65,534)
+// C(25, 5) = 53,130; C(25, 4) = 10,650; C(25, 3) = 2300.  This is more than FRAGINDEX_MAX_COMBINATIONS (65,534)
 unsigned int MAX_BITCOUNT = 24;
 int MAX_K_VAL = 10;
 
-int IGNORED_SEQ_CNT = 0; // Sequences that were ignored because they would generate more than MAX_COMBINATIONS combinations.
+int IGNORED_SEQ_CNT = 0; // Sequences that were ignored because they would generate more than FRAGINDEX_MAX_COMBINATIONS combinations.
 
 long TIME_IN_COMBINE = 0;
 long TIME_GEN_MODS = 0;
@@ -77,7 +68,7 @@ long ModificationsPermuter::duration(chrono::time_point<chrono::steady_clock> st
 
 bool ModificationsPermuter::ignorePeptidesWithTooManyMods()
 {
-   return (KEEP_ALL_PEPTIDES == 1);
+   return (FRAGINDEX_KEEP_ALL_PEPTIDES == 1);
 }
 
 
@@ -394,14 +385,14 @@ int ModificationsPermuter::getTotalCombinationCount(vector<int> combinationCount
       {
          int s = set.at(j);
          combos *= combinationCounts.at(s);
-         if (ignorePeptidesWithTooManyMods() && combos > MAX_COMBINATIONS)
+         if (ignorePeptidesWithTooManyMods() && combos > FRAGINDEX_MAX_COMBINATIONS)
          {
             return -1;
          }
       }
       allCombos += combos;
    }
-   return ignorePeptidesWithTooManyMods() && allCombos > MAX_COMBINATIONS ? -1 : allCombos; 
+   return ignorePeptidesWithTooManyMods() && allCombos > FRAGINDEX_MAX_COMBINATIONS ? -1 : allCombos; 
 }
 
 
@@ -460,7 +451,7 @@ bool ModificationsPermuter::combine(int* modNumbers,
 
    MOD_NUMBERS.push_back(modification);
 
-   TIME_IN_COMBINE += duration(start);
+// TIME_IN_COMBINE += duration(start);
    return true;
 }
 
@@ -475,8 +466,6 @@ void ModificationsPermuter::generateModifications(string* sequence,
                                                   int ALL_COMBINATION_CNT,
                                                   unsigned long long* ALL_COMBINATIONS)
 {
-   auto startGenMods = startTime();
-
    vector<unsigned long long> modBitmasks; // One entry in the vector for each user specified modification found in the sequence
    vector<int> modIndices; // Indices in the ALL_MODS array of the modifications found in the given sequence
    vector<int> combinationCounts; // Number of combinations that would be generated for each modification
@@ -504,7 +493,7 @@ void ModificationsPermuter::generateModifications(string* sequence,
 
          int combinationCount = CombinatoricsUtils::getCombinationCount(int(bitCount), max_mods_per_mod); // nCk + nCk-1 +...+nC1
 
-         if (ignorePeptidesWithTooManyMods() && combinationCount > MAX_COMBINATIONS)
+         if (ignorePeptidesWithTooManyMods() && combinationCount > FRAGINDEX_MAX_COMBINATIONS)
          {
             IGNORED_SEQ_CNT++;
             return;
@@ -527,18 +516,18 @@ void ModificationsPermuter::generateModifications(string* sequence,
 
       const int calculatedCombinationsCount = combinationCounts[idx]; // number of calculated possible combinations
 
-      if (ignorePeptidesWithTooManyMods() && calculatedCombinationsCount > MAX_COMBINATIONS)
+      if (ignorePeptidesWithTooManyMods() && calculatedCombinationsCount > FRAGINDEX_MAX_COMBINATIONS)
       {
-         // If we are ignoring peptides with > MAX_COMBINATIONS or reducing MAX_MODS_PER_MOD to get the number of
-         // modified peptides withing the threshold, then the calculated combinations should not exceed MAX_COMBINATIONS
-         cout << "ERROR: calculated combination count exceeds MAX_COMBINATIONS (" << to_string(MAX_COMBINATIONS) +
-            ") but KEEP_ALL_PEPTIDES is set to " << to_string(KEEP_ALL_PEPTIDES);
+         // If we are ignoring peptides with > FRAGINDEX_MAX_COMBINATIONS or reducing FRAGINDEX_MAX_MODS_PER_PEP to get the number of
+         // modified peptides withing the threshold, then the calculated combinations should not exceed FRAGINDEX_MAX_COMBINATIONS
+         cout << "ERROR: calculated combination count exceeds FRAGINDEX_MAX_COMBINATIONS (" << to_string(FRAGINDEX_MAX_COMBINATIONS) +
+            ") but FRAGINDEX_KEEP_ALL_PEPTIDES is set to " << to_string(FRAGINDEX_KEEP_ALL_PEPTIDES);
          // TODO: exit here?
       }
 
       // Some peptides will have > MAX_COMBINATION modification combinations if we are
-      // considering all peptides. In this case, keep only up to MAX_COMBINATIONS
-      int combinationsForModArrLen = KEEP_ALL_PEPTIDES && calculatedCombinationsCount > MAX_COMBINATIONS ? MAX_COMBINATIONS : calculatedCombinationsCount;
+      // considering all peptides. In this case, keep only up to FRAGINDEX_MAX_COMBINATIONS
+      int combinationsForModArrLen = FRAGINDEX_KEEP_ALL_PEPTIDES && calculatedCombinationsCount > FRAGINDEX_MAX_COMBINATIONS ? FRAGINDEX_MAX_COMBINATIONS : calculatedCombinationsCount;
       unsigned long long *combinationsForMod = new unsigned long long[combinationsForModArrLen];
 
       unsigned long long notMod = ~modBitmask;
@@ -558,7 +547,7 @@ void ModificationsPermuter::generateModifications(string* sequence,
 
       for (int j = 0; j < ALL_COMBINATION_CNT; ++j)
       {
-         if (combinationsFound >= MAX_COMBINATIONS)
+         if (combinationsFound >= FRAGINDEX_MAX_COMBINATIONS)
             break;
 
          const unsigned long long combination = ALL_COMBINATIONS[j];
@@ -576,7 +565,6 @@ void ModificationsPermuter::generateModifications(string* sequence,
       }
       combinationsForAllMods[idx++] = combinationsForMod;
    }
-
 
 /*
    if (DEBUG)
@@ -671,9 +659,9 @@ void ModificationsPermuter::generateModifications(string* sequence,
             {
                currIdx[i] = 0;
             }
-            if (KEEP_ALL_PEPTIDES && totalModNumCount + modNumCalculated >= MAX_COMBINATIONS)
+            if (FRAGINDEX_KEEP_ALL_PEPTIDES && totalModNumCount + modNumCalculated >= FRAGINDEX_MAX_COMBINATIONS)
             {
-               break; // Don't keep more than MAX_COMBINATIONS modifications
+               break; // Don't keep more than FRAGINDEX_MAX_COMBINATIONS modifications
             }
          }
 
@@ -686,8 +674,8 @@ void ModificationsPermuter::generateModifications(string* sequence,
          delete[] modIndicesToMerge;
          delete[] combinationCountsToMerge;
 
-         if (KEEP_ALL_PEPTIDES && totalModNumCount >= MAX_COMBINATIONS)
-            break; // Don't keep more than MAX_COMBINATIONS modifications
+         if (FRAGINDEX_KEEP_ALL_PEPTIDES && totalModNumCount >= FRAGINDEX_MAX_COMBINATIONS)
+            break; // Don't keep more than FRAGINDEX_MAX_COMBINATIONS modifications
       }
 
       if (MOD_NUM != startModNum + totalModNumCount)
@@ -715,7 +703,7 @@ void ModificationsPermuter::generateModifications(string* sequence,
    modIndices.clear();
    combinationCounts.clear();
 
-   TIME_GEN_MODS += duration(startGenMods);
+// TIME_GEN_MODS += duration(startGenMods);
 }
 
 

@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include "Common.h"
 #include "CometDataInternal.h"
@@ -40,7 +31,6 @@ CometPreprocess::CometPreprocess()
 {
 }
 
-
 CometPreprocess::~CometPreprocess()
 {
 }
@@ -50,6 +40,454 @@ void CometPreprocess::Reset()
     _bFirstScan = true;
     _bDoneProcessingAllSpectra = false;
 }
+
+bool CometPreprocess::ReadPrecursors(MSReader &mstReader)
+{
+   int iFileLastScan = -1;         // The actual last scan in the file.
+   int iFirstScan = 0;
+   int iLastScan = 0;
+   int iTmpCount = 0;
+   int iScanNumber = 0;
+   int iSpectrumCharge;
+   Spectrum mstSpectrum;           // For holding spectrum.
+
+   int iMaxBin = BIN(g_staticParams.options.dPeptideMassHigh);
+
+
+   if (g_staticParams.options.scanRange.iStart != 0)
+      iFirstScan = g_staticParams.options.scanRange.iStart;
+
+   if (g_staticParams.options.scanRange.iEnd != 0)
+      iLastScan = g_staticParams.options.scanRange.iEnd;
+
+   // Load all input spectra.
+   while (true)
+   {
+      // Loads in MSMS spectrum data.
+      if (_bFirstScan)
+      {
+         PreloadIons(mstReader, mstSpectrum, false, 0);  // Use 0 as scan num here in last argument instead of iFirstScan; must
+         _bFirstScan = false;                            // be MS/MS scan else data not read by MSToolkit so safer to start at 0.
+      }                                                  // Not ideal as could be reading non-relevant scans but it's fast enough.
+      else
+      {
+         PreloadIons(mstReader, mstSpectrum, true);
+      }
+
+      if (iFileLastScan == -1)
+      {
+         iFileLastScan = mstReader.getLastScan();
+         if (iLastScan == 0 && iFileLastScan != -1)
+            iLastScan = iFileLastScan;
+      }
+
+      if ((iFileLastScan != -1) && (iFileLastScan < iFirstScan))
+      {
+         _bDoneProcessingAllSpectra = true;
+         break;
+      }
+
+      iScanNumber = mstSpectrum.getScanNumber();
+
+      if (iLastScan > 0 && iScanNumber > iLastScan)
+         break;
+
+      if (g_staticParams.bSkipToStartScan && iScanNumber < iFirstScan)
+      {
+         g_staticParams.bSkipToStartScan = false;
+
+         PreloadIons(mstReader, mstSpectrum, false, iFirstScan);
+         iScanNumber = mstSpectrum.getScanNumber();
+
+         // iScanNumber will equal 0 if iFirstScan is not the right scan level
+         // So need to keep reading the next scan until we get a non-zero scan number
+         while (iScanNumber == 0 && iFirstScan < iFileLastScan)
+         {
+            iFirstScan++;
+            PreloadIons(mstReader, mstSpectrum, false, iFirstScan);
+            iScanNumber = mstSpectrum.getScanNumber();
+         }
+      }
+
+
+      if (iScanNumber != 0)
+      {
+         if (iLastScan > 0 && iScanNumber > iLastScan)
+         {
+            _bDoneProcessingAllSpectra = true;
+            break;
+         }
+         if (iFirstScan != 0 && iLastScan > 0 && !(iFirstScan <= iScanNumber && iScanNumber <= iLastScan))
+            continue;
+         if (iFirstScan != 0 && iLastScan == 0 && iScanNumber < iFirstScan)
+            continue;
+
+         g_staticParams.bSkipToStartScan = false;
+         iTmpCount = iScanNumber;
+
+/*   
+         // Thermo's monoisotopic m/z determine can fail sometimes. Assume that when
+         // the mono m/z value is less than selection window, it is wrong and use the
+         // selection m/z as the precursor m/z. This should
+         // be invoked when searching Thermo raw files and mzML converted from those.
+         // Only applied when single precursor present.
+         for (int i = 0 ; i < mstSpectrum.sizeMZ(); ++i)  // walk through all precursor m/z's; usually just one
+         {
+            double dMZ = mstSpectrum.getMonoMZ(i);
+
+            if (g_staticParams.options.bCorrectMass && mstSpectrum.sizeMZ() == 1)
+            {
+               double dSelectionLower = mstSpectrum.getSelWindowLower();
+               double dSelectedMZ = mstSpectrum.getMZ(i);
+
+               if (dMZ > 0.1 && dSelectionLower > 0.1 && dMZ+0.1 < dSelectionLower)
+                  dMZ = dSelectedMZ;
+            }
+
+            if (dMZ == 0)
+               dMZ = mstSpectrum.getMZ(i);
+
+            if (!(iScanNumber % 5000))
+               printf("OK %s  dMZ %f %d/%d\n", g_staticParams.inputFile.szFileName, dMZ, iScanNumber, iFileLastScan);
+         }
+*/
+
+         // To run a search, all that's needed is MH+ and Z. So need to generate
+         // all combinations of these for each spectrum, whether there's a known
+         // Z for each precursor or if Comet has to guess the 1+ or 2+/3+ charges.
+
+         for (int i = 0 ; i < mstSpectrum.sizeMZ(); ++i)  // walk through all precursor m/z's; usually just one
+         {
+            double dMZ = 0.0;              // m/z to use for analysis
+            vector<int> vChargeStates;
+
+            if (mstSpectrum.sizeMZ() == mstSpectrum.sizeZ())
+            {
+               iSpectrumCharge = mstSpectrum.atZ(i).z;
+            }
+            else if (mstSpectrum.sizeMZ() == 1 && mstSpectrum.sizeMZ() < mstSpectrum.sizeZ())
+            {
+               // example from ms2 file with one precursor and multiple Z lines?
+               // will need to include all spectrum charges below
+               iSpectrumCharge = mstSpectrum.atZ(i).z;
+            }
+            else if (mstSpectrum.sizeMZ() > mstSpectrum.sizeZ())
+            {
+               // need to ignore any spectrum charge as don't know which correspond charge to which precursor
+               iSpectrumCharge = 0;
+            }
+            else
+            {
+               // don't know what condition/spectrum type leads here
+               iSpectrumCharge = 0;
+               printf(" Warning, scan %d has %d precursors and %d precursor charges\n", iScanNumber, mstSpectrum.sizeMZ(), mstSpectrum.sizeZ());
+            }
+
+            // Thermo's monoisotopic m/z determine can fail sometimes. Assume that when
+            // the mono m/z value is less than selection window, it is wrong and use the
+            // selection m/z as the precursor m/z. This should
+            // be invoked when searching Thermo raw files and mzML converted from those.
+            // Only applied when single precursor present.
+            dMZ = mstSpectrum.getMonoMZ(i);
+
+            if (g_staticParams.options.bCorrectMass && mstSpectrum.sizeMZ() == 1)
+            {
+               double dSelectionLower = mstSpectrum.getSelWindowLower();
+               double dSelectedMZ = mstSpectrum.getMZ(i);
+
+               if (dMZ > 0.1 && dSelectionLower > 0.1 && dMZ+0.1 < dSelectionLower)
+                  dMZ = dSelectedMZ;
+            }
+
+            if (dMZ == 0)
+               dMZ = mstSpectrum.getMZ(i);
+
+            // 1.  Have spectrum charge from file.  It may be 0.
+            // 2.  If the precursor_charge range is set and override_charge is set, then do something look into charge range.
+            // 3.  Else just use the spectrum charge (and possibly 1 or 2/3 rule)
+            if (g_staticParams.options.iStartCharge > 0 && g_staticParams.options.bOverrideCharge > 0)
+            {
+               if (g_staticParams.options.bOverrideCharge == 1)
+               {
+                  // ignore spectrum charge and use precursor_charge range
+                  for (int z = g_staticParams.options.iStartCharge; z <= g_staticParams.options.iEndCharge; ++z)
+                  {
+                     vChargeStates.push_back(z);
+                  }
+               }
+               else if (g_staticParams.options.bOverrideCharge == 2)
+               {
+                  // only use spectrum charge if it's within the charge range
+                  for (int z = g_staticParams.options.iStartCharge; z <= g_staticParams.options.iEndCharge; ++z)
+                  {
+                     if (z == iSpectrumCharge)
+                        vChargeStates.push_back(z);
+                  }
+               }
+               else if (g_staticParams.options.bOverrideCharge == 3)
+               {
+                  if (iSpectrumCharge > 0)
+                  {
+                     vChargeStates.push_back(iSpectrumCharge);
+                  }
+                  else // use 1+ or charge range
+                  {
+                     double dSumBelow = 0.0;
+                     double dSumTotal = 0.0;
+
+                     for (int i=0; i<mstSpectrum.size(); ++i)
+                     {
+                        dSumTotal += mstSpectrum.at(i).intensity;
+                        if (mstSpectrum.at(i).mz < mstSpectrum.getMZ())
+                           dSumBelow += mstSpectrum.at(i).intensity;
+                     }
+
+                     if (isEqual(dSumTotal, 0.0) || ((dSumBelow/dSumTotal) > 0.95))
+                     {
+                        vChargeStates.push_back(1);
+                     }
+                     else
+                     {
+                        for (int z = g_staticParams.options.iStartCharge; z <= g_staticParams.options.iEndCharge; ++z)
+                        {
+                           vChargeStates.push_back(z);
+                        }
+                     }
+                  }
+               }
+            }
+            else  // use spectrum charge
+            {
+               if (iSpectrumCharge > 0) // use charge from file
+               {
+                  vChargeStates.push_back(iSpectrumCharge);
+
+                  // add in any other charge states for the single precursor m/z
+                  if (mstSpectrum.sizeMZ() == 1 && mstSpectrum.sizeMZ() < mstSpectrum.sizeZ())
+                  {
+                     for (int ii = 1 ; ii < mstSpectrum.sizeZ(); ++ii)
+                     {
+                        vChargeStates.push_back(mstSpectrum.atZ(ii).z);
+                     }
+                  }
+               }
+               else
+               {
+                  double dSumBelow = 0.0;
+                  double dSumTotal = 0.0;
+
+                  for (int i=0; i<mstSpectrum.size(); ++i)
+                  {
+                     dSumTotal += mstSpectrum.at(i).intensity;
+
+                     if (mstSpectrum.at(i).mz < mstSpectrum.getMZ())
+                        dSumBelow += mstSpectrum.at(i).intensity;
+                  }
+
+                  if (isEqual(dSumTotal, 0.0) || ((dSumBelow/dSumTotal) > 0.95))
+                  {
+                     vChargeStates.push_back(1);
+                  }
+                  else
+                  {
+                     vChargeStates.push_back(2);
+                     vChargeStates.push_back(3);
+                  }
+               }
+            }
+
+            // now analyze all possible precursor charges for this spectrum
+            for (vector<int>::iterator iter = vChargeStates.begin(); iter != vChargeStates.end(); ++iter)
+            {
+               int iPrecursorCharge = *iter;
+               double dProtonatedMass = (dMZ * iPrecursorCharge) - (iPrecursorCharge * PROTON_MASS)  + PROTON_MASS;
+
+               double dToleranceLow = 0;
+               double dToleranceHigh = 0;
+   
+               if (g_staticParams.tolerances.iMassToleranceUnits == 0) // amu
+               {
+                  dToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus;
+                  dToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus;
+
+                  if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
+                  {
+                     dToleranceLow  *= iPrecursorCharge;
+                     dToleranceHigh *= iPrecursorCharge;
+                  }
+               }
+               else if (g_staticParams.tolerances.iMassToleranceUnits == 1) // mmu
+               {
+                  dToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * 0.001;
+                  dToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus  * 0.001;
+
+                  if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
+                  {
+                     dToleranceLow  *= iPrecursorCharge;
+                     dToleranceHigh *= iPrecursorCharge;
+                  }
+               }
+
+               // tolerances are fixed above except if ppm is specified
+               if (g_staticParams.tolerances.iMassToleranceUnits == 2) // ppm
+               {
+                  dToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * dProtonatedMass / 1E6;
+                  dToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus * dProtonatedMass / 1E6;
+               }
+
+               // these are the range of neutral mass bins if any theoretical peptide falls into,
+               // we want to add them to the fragment index
+               double dMassLow = dProtonatedMass + dToleranceLow;
+               double dMassHigh = dProtonatedMass + dToleranceHigh;
+               int iStart = BIN(dMassLow);  // add dToleranceLow as it will be negative number
+               int iEnd   = BIN(dMassHigh);
+
+               if (iStart < 0)
+                  iStart = 0;   // real problems if we actually get here
+               if (iEnd > iMaxBin)
+                  iEnd = iMaxBin;
+
+               for (int x = iStart ; x <= iEnd; ++x)
+               {
+                  g_bIndexPrecursors[x] = true;
+               }
+
+               // now go through each isotope offset
+               if (g_staticParams.tolerances.iIsotopeError > 0)
+               {
+                  if (g_staticParams.tolerances.iIsotopeError >= 1
+                        && g_staticParams.tolerances.iIsotopeError <= 6)
+                  {
+                     iStart = BIN(dMassLow - C13_DIFF * PROTON_MASS);     // do +1 offset
+                     iEnd   = BIN(dMassHigh - C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                        iStart = 0;
+                     if (iEnd > iMaxBin)
+                        iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                        g_bIndexPrecursors[x] = true;
+
+                     if (g_staticParams.tolerances.iIsotopeError >= 2
+                           && g_staticParams.tolerances.iIsotopeError <= 6
+                           && g_staticParams.tolerances.iIsotopeError != 5)
+                     {
+                        iStart = BIN(dMassLow - 2.0 * C13_DIFF * PROTON_MASS);     // do +2 offset
+                        iEnd   = BIN(dMassHigh - 2.0 * C13_DIFF * PROTON_MASS);
+                        if (iStart < 0)
+                           iStart = 0;
+                        if (iEnd > iMaxBin)
+                           iEnd = iMaxBin;
+                        for (int x = iStart ; x <= iEnd; ++x)
+                           g_bIndexPrecursors[x] = true;
+
+                        if (g_staticParams.tolerances.iIsotopeError >= 3
+                              && g_staticParams.tolerances.iIsotopeError <= 6
+                              && g_staticParams.tolerances.iIsotopeError != 5)
+                        {
+                           iStart = BIN(dMassLow - 3.0 * C13_DIFF * PROTON_MASS);     // do +3 offset
+                           iEnd   = BIN(dMassHigh - 3.0 * C13_DIFF * PROTON_MASS);
+                           if (iStart < 0)
+                              iStart = 0;
+                           if (iEnd > iMaxBin)
+                              iEnd = iMaxBin;
+                           for (int x = iStart ; x <= iEnd; ++x)
+                              g_bIndexPrecursors[x] = true;
+                        }
+                     }
+                  }
+
+                  if (g_staticParams.tolerances.iIsotopeError == 5
+                        || g_staticParams.tolerances.iIsotopeError == 6)
+                  {         
+                     iStart = BIN(dMassLow + C13_DIFF * PROTON_MASS);      // do -1 offset
+                     iEnd   = BIN(dMassHigh + C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                                 iStart = 0;
+                     if (iEnd > iMaxBin)
+                                 iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                                 g_bIndexPrecursors[x] = true;
+
+                     if (g_staticParams.tolerances.iIsotopeError == 6)     // do -2 and -3 offsets
+                     {
+                        iStart = BIN(dMassLow + 2.0 * C13_DIFF * PROTON_MASS);
+                        iEnd   = BIN(dMassHigh + 2.0 * C13_DIFF * PROTON_MASS);
+                        if (iStart < 0)
+                           iStart = 0;
+                        if (iEnd > iMaxBin)
+                           iEnd = iMaxBin;
+                        for (int x = iStart ; x <= iEnd; ++x)
+                           g_bIndexPrecursors[x] = true;
+
+                        iStart = BIN(dMassLow + 3.0 * C13_DIFF * PROTON_MASS);
+                        iEnd   = BIN(dMassHigh + 3.0 * C13_DIFF * PROTON_MASS);
+                        if (iStart < 0)
+                           iStart = 0;
+                        if (iEnd > iMaxBin)
+                           iEnd = iMaxBin;
+                        for (int x = iStart ; x <= iEnd; ++x)
+                           g_bIndexPrecursors[x] = true;
+                     }
+                  }
+                  else if (g_staticParams.tolerances.iIsotopeError == 7)            // do -8, -4, +4, +8 offsets
+                  {
+                     iStart = BIN(dMassLow + 8.0 * C13_DIFF * PROTON_MASS);
+                     iEnd   = BIN(dMassHigh + 8.0 * C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                        iStart = 0;
+                     if (iEnd > iMaxBin)
+                        iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                        g_bIndexPrecursors[x] = true;
+
+                     iStart = BIN(dMassLow + 4.0 * C13_DIFF * PROTON_MASS);
+                     iEnd   = BIN(dMassHigh + 4.0 * C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                        iStart = 0;
+                     if (iEnd > iMaxBin)
+                        iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                        g_bIndexPrecursors[x] = true;
+
+                     iStart = BIN(dMassLow - 8.0 * C13_DIFF * PROTON_MASS);
+                     iEnd   = BIN(dMassHigh - 8.0 * C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                        iStart = 0;
+                     if (iEnd > iMaxBin)
+                        iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                        g_bIndexPrecursors[x] = true;
+
+                     iStart = BIN(dMassLow - 4.0 * C13_DIFF * PROTON_MASS);
+                     iEnd   = BIN(dMassHigh - 4.0 * C13_DIFF * PROTON_MASS);
+                     if (iStart < 0)
+                        iStart = 0;
+                     if (iEnd > iMaxBin)
+                        iEnd = iMaxBin;
+                     for (int x = iStart ; x <= iEnd; ++x)
+                        g_bIndexPrecursors[x] = true;
+                  }
+               }
+            }
+         }
+      }
+      else
+      {
+         // What happens here when iScanNumber == 0 and it is an mzXML file?
+         // Best way to deal with this is to keep trying to read but track each
+         // attempt and break when the count goes past the mzXML's last scan.
+         iTmpCount++;
+
+         if (iTmpCount > iFileLastScan)
+            break;
+      }
+   }
+
+// mstReader.closeFile();
+
+   return true;
+}
+
 
 bool CometPreprocess::LoadAndPreprocessSpectra(MSReader &mstReader,
                                                int iFirstScan,
@@ -160,7 +598,7 @@ bool CometPreprocess::LoadAndPreprocessSpectra(MSReader &mstReader,
             }
          }
 
-         if (mstSpectrum.size()-iNumClearedPeaks >= g_staticParams.options.iMinPeaks)
+         if (mstSpectrum.size() - iNumClearedPeaks >= g_staticParams.options.iMinPeaks)
          {
             if (iAnalysisType == AnalysisType_SpecificScanRange && iLastScan > 0 && iScanNumber > iLastScan)
             {
@@ -242,7 +680,8 @@ bool CometPreprocess::LoadAndPreprocessSpectra(MSReader &mstReader,
 }
 
 
-void CometPreprocess::PreprocessThreadProc(PreprocessThreadData *pPreprocessThreadData, ThreadPool* tp)
+void CometPreprocess::PreprocessThreadProc(PreprocessThreadData *pPreprocessThreadData,
+                                           ThreadPool* tp)
 {
    // This returns false if it fails, but the errors are already logged
    // so no need to check the return value here.
@@ -251,7 +690,6 @@ void CometPreprocess::PreprocessThreadProc(PreprocessThreadData *pPreprocessThre
    int i;
 
    Threading::LockMutex(g_preprocessMemoryPoolMutex);
-
    for (i=0; i<g_staticParams.options.iNumThreads; ++i)
    {
       if (pbMemoryPool[i]==false)
@@ -814,7 +1252,6 @@ bool CometPreprocess::PreprocessSpectrum(Spectrum &spec,
          printf(" Warning, scan %d has %d precursors and %d precursor charges\n", iScanNumber, spec.sizeMZ(), spec.sizeZ());
       }
 
-
       // Thermo's monoisotopic m/z determine can fail sometimes. Assume that when
       // the mono m/z value is less than selection window, it is wrong and use the
       // selection m/z as the precursor m/z. This should
@@ -947,7 +1384,7 @@ bool CometPreprocess::PreprocessSpectrum(Spectrum &spec,
             pScoring->_pepMassInfo.dExpPepMass = dMass;
             pScoring->_spectrumInfoInternal.iChargeState = iPrecursorCharge;
             pScoring->_spectrumInfoInternal.dTotalIntensity = 0.0;
-            pScoring->_spectrumInfoInternal.dRTime = 60.0*spec.getRTime();;
+            pScoring->_spectrumInfoInternal.dRTime = 60.0*spec.getRTime();
             pScoring->_spectrumInfoInternal.iScanNumber = iScanNumber;
 
             if (iPrecursorCharge == 1)
@@ -1061,150 +1498,99 @@ bool CometPreprocess::CheckExistOutFile(int iCharge,
 
 bool CometPreprocess::AdjustMassTol(struct Query *pScoring)
 {
-   if (g_pvDIAWindows.size() == 0)
+   if (g_staticParams.tolerances.iMassToleranceUnits == 0) // amu
    {
-      if (g_staticParams.tolerances.iMassToleranceUnits == 0) // amu
+      pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus;
+      pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus;
+
+      if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
       {
-         pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus;
-         pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus;
-
-         if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
-         {
-            pScoring->_pepMassInfo.dPeptideMassToleranceLow  *= pScoring->_spectrumInfoInternal.iChargeState;
-            pScoring->_pepMassInfo.dPeptideMassToleranceHigh *= pScoring->_spectrumInfoInternal.iChargeState;
-         }
-      }
-      else if (g_staticParams.tolerances.iMassToleranceUnits == 1) // mmu
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * 0.001;
-         pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus  * 0.001;
-
-         if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
-         {
-            pScoring->_pepMassInfo.dPeptideMassToleranceLow  *= pScoring->_spectrumInfoInternal.iChargeState;
-            pScoring->_pepMassInfo.dPeptideMassToleranceHigh *= pScoring->_spectrumInfoInternal.iChargeState;
-         }
-      }
-      else // ppm
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * pScoring->_pepMassInfo.dExpPepMass / 1E6;
-         pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus * pScoring->_pepMassInfo.dExpPepMass / 1E6;
-      }
-
-      if (g_staticParams.tolerances.iIsotopeError == 0)
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 1) // search 0, +1 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 2) // search 0, +1, +2 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 2.0 * C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 3) // search 0, +1, +2, +3 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 4) // search -8, -4, 0, 4, 8 windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 8.1;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 8.1;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 5) // search -1, 0, +1, +2, +3 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 1.0 * C13_DIFF * PROTON_MASS;
-
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 6) // search -3, -2, -1, 0, +1, +2, +3 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 3.0 * C13_DIFF * PROTON_MASS;
-      }
-      else if (g_staticParams.tolerances.iIsotopeError == 7) // search -1, 0, +1 isotope windows
-      {
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - C13_DIFF * PROTON_MASS;
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + C13_DIFF * PROTON_MASS;
-      }
-      else  // Should not get here.
-      {
-         char szErrorMsg[256];
-         sprintf(szErrorMsg,  " Error - iIsotopeError=%d\n",  g_staticParams.tolerances.iIsotopeError);
-         string strErrorMsg(szErrorMsg);
-         g_cometStatus.SetStatus(CometResult_Failed, strErrorMsg);
-         logerr(szErrorMsg);
-         return false;
-      }
-
-      if (g_staticParams.vectorMassOffsets.size() > 0)
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus -= g_staticParams.vectorMassOffsets[g_staticParams.vectorMassOffsets.size()-1];
-
-      if (pScoring->_pepMassInfo.dPeptideMassTolerancePlus > g_staticParams.options.dPeptideMassHigh)
-         pScoring->_pepMassInfo.dPeptideMassTolerancePlus = g_staticParams.options.dPeptideMassHigh;
-
-      if (pScoring->_pepMassInfo.dPeptideMassToleranceMinus < g_staticParams.options.dPeptideMassLow)
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = g_staticParams.options.dPeptideMassLow;
-
-      if (pScoring->_pepMassInfo.dPeptideMassToleranceMinus < 100.0)   // there should be no reason to have a peptide mass smaller than this
-         pScoring->_pepMassInfo.dPeptideMassToleranceMinus = 100.0;    // why not a much larger cutoff??
-
-      // now set Low/High to mass range around ExpMass
-      pScoring->_pepMassInfo.dPeptideMassToleranceLow = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow;
-      pScoring->_pepMassInfo.dPeptideMassToleranceHigh = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
-   }
-   else
-   {
-      // if DIA windows file is specified, this overrides any mass tolerance
-      // setting including isotope offsets and mass offsets
-
-
-      int iCharge;
-      double dPrecMZ;
-      double dStartWindowMZ;
-      double dStartWindowMass;
-      double dEndWindowMZ;
-      double dEndWindowMass;
-     
-      iCharge = pScoring->_spectrumInfoInternal.iChargeState;
-
-      dPrecMZ = (pScoring->_pepMassInfo.dExpPepMass + (iCharge - 1.0) * PROTON_MASS) / iCharge;  //dExpPepMass is MH+
-
-      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = 0.0;
-      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = 0.0;
-
-      for (std::vector<double>::iterator it = g_pvDIAWindows.begin(); it != g_pvDIAWindows.end(); ++it)
-      {  
-         dStartWindowMZ = *it;
-         *it++;
-         dEndWindowMZ = *it;
-
-
-         // see if precursor m/z is within a DIA window
-         if (dStartWindowMZ <= dPrecMZ && dPrecMZ <= dEndWindowMZ)
-         {
-            // translate windows to neutral mass space
-            dStartWindowMass = (dStartWindowMZ * iCharge) - (iCharge - 1.0) * PROTON_MASS;
-            dEndWindowMass = (dEndWindowMZ * iCharge) - (iCharge - 1.0) * PROTON_MASS;
-
-            if (pScoring->_pepMassInfo.dPeptideMassToleranceMinus == 0.0
-                  || pScoring->_pepMassInfo.dPeptideMassToleranceMinus > dStartWindowMass)
-            {
-               pScoring->_pepMassInfo.dPeptideMassToleranceMinus = dStartWindowMass;
-            }
-            if (pScoring->_pepMassInfo.dPeptideMassTolerancePlus == 0.0
-                  || pScoring->_pepMassInfo.dPeptideMassTolerancePlus < dEndWindowMass)
-            {
-               pScoring->_pepMassInfo.dPeptideMassTolerancePlus = dEndWindowMass;
-            }
-         }
+         pScoring->_pepMassInfo.dPeptideMassToleranceLow  *= pScoring->_spectrumInfoInternal.iChargeState;
+         pScoring->_pepMassInfo.dPeptideMassToleranceHigh *= pScoring->_spectrumInfoInternal.iChargeState;
       }
    }
+   else if (g_staticParams.tolerances.iMassToleranceUnits == 1) // mmu
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * 0.001;
+      pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus  * 0.001;
+
+      if (g_staticParams.tolerances.iMassToleranceType == 1)  // precursor m/z tolerance
+      {
+         pScoring->_pepMassInfo.dPeptideMassToleranceLow  *= pScoring->_spectrumInfoInternal.iChargeState;
+         pScoring->_pepMassInfo.dPeptideMassToleranceHigh *= pScoring->_spectrumInfoInternal.iChargeState;
+      }
+   }
+   else // ppm
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceLow  = g_staticParams.tolerances.dInputToleranceMinus * pScoring->_pepMassInfo.dExpPepMass / 1E6;
+      pScoring->_pepMassInfo.dPeptideMassToleranceHigh = g_staticParams.tolerances.dInputTolerancePlus * pScoring->_pepMassInfo.dExpPepMass / 1E6;
+   }
+
+   if (g_staticParams.tolerances.iIsotopeError == 0)
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 1) // search 0, +1 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 2) // search 0, +1, +2 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 2.0 * C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 3) // search 0, +1, +2, +3 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 4) // search -1, 0, +1, +2, +3 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 1.0 * C13_DIFF * PROTON_MASS;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 5) // search -1, 0, +1 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + C13_DIFF * PROTON_MASS;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 6) // search -3, -2, -1, 0, +1, +2, +3 isotope windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 3.0 * C13_DIFF * PROTON_MASS;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 3.0 * C13_DIFF * PROTON_MASS;
+   }
+   else if (g_staticParams.tolerances.iIsotopeError == 7) // search -8, -4, 0, 4, 8 windows
+   {
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow - 8.1;
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh + 8.1;
+   }
+   else  // Should not get here.
+   {
+      char szErrorMsg[256];
+      sprintf(szErrorMsg,  " Error - iIsotopeError=%d\n",  g_staticParams.tolerances.iIsotopeError);
+      string strErrorMsg(szErrorMsg);
+      g_cometStatus.SetStatus(CometResult_Failed, strErrorMsg);
+      logerr(szErrorMsg);
+      return false;
+   }
+
+   if (g_staticParams.vectorMassOffsets.size() > 0)
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus -= g_staticParams.vectorMassOffsets[g_staticParams.vectorMassOffsets.size()-1];
+
+   if (pScoring->_pepMassInfo.dPeptideMassTolerancePlus > g_staticParams.options.dPeptideMassHigh)
+      pScoring->_pepMassInfo.dPeptideMassTolerancePlus = g_staticParams.options.dPeptideMassHigh;
+
+   if (pScoring->_pepMassInfo.dPeptideMassToleranceMinus < g_staticParams.options.dPeptideMassLow)
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = g_staticParams.options.dPeptideMassLow;
+
+   if (pScoring->_pepMassInfo.dPeptideMassToleranceMinus < 100.0)   // there should be no reason to have a peptide mass smaller than this
+      pScoring->_pepMassInfo.dPeptideMassToleranceMinus = 100.0;    // why not a much larger cutoff??
+
+   // now set Low/High to mass range around ExpMass
+   pScoring->_pepMassInfo.dPeptideMassToleranceLow = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceLow;
+   pScoring->_pepMassInfo.dPeptideMassToleranceHigh = pScoring->_pepMassInfo.dExpPepMass + pScoring->_pepMassInfo.dPeptideMassToleranceHigh;
 
    return true;
 }
@@ -1239,23 +1625,33 @@ bool CometPreprocess::LoadIons(struct Query *pScoring,
          dIntensityCutoff = g_staticParams.options.dMinIntensity;
    }
 
+   int iNumFragmentPeaks = 0;
 
-   i = 0;
-   while(true)
+   if (g_staticParams.bIndexDb && mstSpectrum.size() > FRAGINDEX_MAX_NUMPEAKS)
    {
-      if (i >= mstSpectrum.size())
-         break;
+      // sorts spectrum in ascending order by intensity
+      mstSpectrum.sortIntensity();
+   }
 
+   // read peaks in reverse order as they're possibly sorted in ascending order by
+   // intensity and vdRawFragmentPeakMass needs most intense peaks
+   for (i = mstSpectrum.size() - 1; i >= 0; --i)
+   {
       dIon = mstSpectrum.at(i).mz;
       dIntensity = mstSpectrum.at(i).intensity;
-      i++;
 
       pScoring->_spectrumInfoInternal.dTotalIntensity += dIntensity;
 
       if (dIntensity >= dIntensityCutoff && dIntensity > 0.0)
       {
-         // store spectra for fragment index search
-         pScoring->vdRawFragmentPeakMass.push_back(dIon);
+         if (g_staticParams.bIndexDb && iNumFragmentPeaks < FRAGINDEX_MAX_NUMPEAKS)
+         {
+            // Store list of fragment masses for fragment index search
+            // Intensities don't matter here
+            pScoring->vdRawFragmentPeakMass.push_back(dIon);
+
+            iNumFragmentPeaks++;
+         }
 
          if (dIon < (pScoring->_pepMassInfo.dExpPepMass + 50.0))
          {
@@ -1686,7 +2082,8 @@ bool CometPreprocess::PreprocessSingleSpectrum(int iPrecursorCharge,
 
       if (bPass)
       {
-         pScoring->vdRawFragmentPeakMass.push_back(dIon);   // raw peaks for fragment indexing
+         if (g_staticParams.bIndexDb)
+            pScoring->vdRawFragmentPeakMass.push_back(dIon);
 
          if (dIon < (pScoring->_pepMassInfo.dExpPepMass + 50.0))
          {
@@ -1711,11 +2108,6 @@ bool CometPreprocess::PreprocessSingleSpectrum(int iPrecursorCharge,
             }
          }
       }
-   }
-
-   if (pScoring->vdRawFragmentPeakMass.size() > 200)
-   {
-      // reduce peaks applied to the fragment index search
    }
 
    pScoring->pfFastXcorrData = new float[pScoring->_spectrumInfoInternal.iArraySize]();

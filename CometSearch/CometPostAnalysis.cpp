@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include "Common.h"
 #include "CometDataInternal.h"
@@ -221,6 +212,9 @@ void CometPostAnalysis::AnalyzeSP(int iWhichQuery)
 {
    Query* pQuery = g_pvQuery.at(iWhichQuery);
 
+   // need this sort first for all iNumStored hits
+   std::sort(pQuery->_pResults, pQuery->_pResults + g_staticParams.options.iNumStored, SortFnXcorr);
+
    int iSize = pQuery->iMatchPeptideCount;
 
    // Need to analyze up to iNumStored here so that Sp rank can range to this
@@ -243,7 +237,7 @@ void CometPostAnalysis::AnalyzeSP(int iWhichQuery)
          pQuery->_pResults[ii].iRankSp = pQuery->_pResults[ii-1].iRankSp + 1;
    }
 
-   // Then sort each entry by xcorr
+   // Then sort each entry in descending order by xcorr
    std::sort(pQuery->_pResults, pQuery->_pResults + iSize, SortFnXcorr);
 
    // if mod search, now sort peptides with same score but different mod locations
@@ -273,6 +267,9 @@ void CometPostAnalysis::AnalyzeSP(int iWhichQuery)
    // Repeat for decoy search
    if (g_staticParams.options.iDecoySearch == 2)
    {
+      // need this sort first for all iNumStored hits
+      std::sort(pQuery->_pDecoys, pQuery->_pDecoys + g_staticParams.options.iNumStored, SortFnXcorr);
+
       iSize = pQuery->iDecoyMatchPeptideCount;
 
       if (iSize > g_staticParams.options.iNumPeptideOutputLines)
@@ -395,9 +392,9 @@ void CometPostAnalysis::CalculateSP(Results *pOutput,
 
          iMaxFragCharge = g_pvQuery.at(iWhichQuery)->_spectrumInfoInternal.iMaxFragCharge;
 
-         if (pOutput[i].szPrevNextAA[0] == '-' || pOutput[i].bClippedM)
+         if (pOutput[i].cPrevAA == '-' || pOutput[i].bClippedM)
             dBion += g_staticParams.staticModifications.dAddNterminusProtein;
-         if (pOutput[i].szPrevNextAA[1] == '-')
+         if (pOutput[i].cNextAA == '-')
             dYion += g_staticParams.staticModifications.dAddCterminusProtein;
 
          if (g_staticParams.variableModParameters.bVarModSearch
@@ -609,6 +606,8 @@ void CometPostAnalysis::CalculateSP(Results *pOutput,
 
          pOutput[i].fScoreSp = (float)((dTmpIntenMatch * iMatchedFragmentIonCt * (1.0 + dConsec)) /
             ((pOutput[i].iLenPeptide - 1.0) * iMaxFragCharge * g_staticParams.ionInformation.iNumIonSeriesUsed));
+         // round Sp to 3 significant digits
+         pOutput[i].fScoreSp =  ( ((int)pOutput[i].fScoreSp)  * 100)  / 100.0;
 
          pOutput[i].iMatchedIons = iMatchedFragmentIonCt;
       }
@@ -631,6 +630,25 @@ bool CometPostAnalysis::SortFnSp(const Results &a,
 {
    if (a.fScoreSp > b.fScoreSp)
       return true;
+   else if (a.fScoreSp == b.fScoreSp)
+   {
+      int iCmp = strcmp(a.szPeptide, b.szPeptide);
+
+      if (iCmp < 0)
+         return true;
+      else if (iCmp > 0)
+         return false;
+      else  // same peptide, check mod state
+      {
+         for (int i = 0; i < g_staticParams.options.peptideLengthRange.iEnd; ++i)
+         {
+            if (a.piVarModSites[i] < b.piVarModSites[i])
+               return true;
+            else if (a.piVarModSites[i] > b.piVarModSites[i])
+               return false;
+         }
+      }
+   }
 
    return false;
 }
@@ -641,8 +659,25 @@ bool CometPostAnalysis::SortFnXcorr(const Results &a,
 {
    if (a.fXcorr > b.fXcorr)
       return true;
-   else if (a.fXcorr == b.fXcorr && strcmp(a.szPeptide, b.szPeptide) < 0)
-      return true;
+   else if (a.fXcorr == b.fXcorr)
+   {
+      int iCmp = strcmp(a.szPeptide, b.szPeptide);
+
+      if (iCmp < 0)
+         return true;
+      else if (iCmp > 0)
+         return false;
+      else  // same peptide, check mod state
+      {
+         for (int i = 0; i < g_staticParams.options.peptideLengthRange.iEnd; ++i)
+         {
+            if (a.piVarModSites[i] < b.piVarModSites[i])
+               return true;
+            else if (a.piVarModSites[i] > b.piVarModSites[i])
+               return false;
+         }
+      }
+   }
 
    return false;
 }

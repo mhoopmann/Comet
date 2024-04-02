@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include "Common.h"
 #include "CometDataInternal.h"
@@ -33,9 +24,6 @@ SOFTWARE.
 #include "limits.h"
 #include "stdlib.h"
 
-#ifdef _WIN32
-#define PATH_MAX _MAX_PATH
-#endif
 
 CometWriteMzIdentML::CometWriteMzIdentML()
 {
@@ -769,7 +757,7 @@ void CometWriteMzIdentML::GetModificationID(char cResidue,
    *strModRef = "PSI-MS";
    *strModName = "unknown modification";
 
-   if (fabs(dModMass - 15.994915) < 0.01 && strchr("DKNPFYRMCWHGUEILQSTV", cResidue))
+   if (fabs(dModMass - Oxygen_Mono) < 0.01 && strchr("DKNPFYRMCWHGUEILQSTV", cResidue))
    {
       *strModID = "UNIMOD:35";
       *strModRef = "UNIMOD";
@@ -1322,21 +1310,33 @@ void CometWriteMzIdentML::WriteSpectrumIdentificationList(FILE* fpout,
    string strProtsDecoy;    // delimited list of "offsets:iStartResidue;" pairs
 */
 
+   double dPrevRT = 0;
    for (std::vector<MzidTmpStruct>::iterator itMzid = (*vMzid).begin(); itMzid < (*vMzid).end(); ++itMzid)
    {
       char szProteinName[512];
       string strProteinName;
       long lOffset;
 
-      fprintf(fpout, "    <SpectrumIdentificationResult id=\"SIR_%d.%d.%d\" spectrumID=\"%d\" spectraData_ref=\"SD\">\n",
-            (*itMzid).iWhichQuery,
-            (*itMzid).iWhichResult + 1,
-            (*itMzid).iBatchNum,
-            (*itMzid).iScanNumber);
+      if ((*itMzid).iWhichResult == 0)
+      {
+         if (itMzid != (*vMzid).begin())
+         {
+            if (dPrevRT > 0.0)
+            {
+               fprintf(fpout, "     <cvParam cvRef=\"PSI-MS\" accession=\"MS:1000894\" name=\"retention time\" value=\"%0.4f\" unitCvRef=\"UO\" unitAccession=\"UO:0000010\" unitName=\"second\"/>\n", dPrevRT);
+            }
+            fprintf(fpout, "    </SpectrumIdentificationResult>\n");
+         }
+         fprintf(fpout, "    <SpectrumIdentificationResult id=\"SIR_%d.%d\" spectrumID=\"%d\" spectraData_ref=\"SD\">\n",
+               (*itMzid).iWhichQuery,
+               (*itMzid).iBatchNum,
+               (*itMzid).iScanNumber);
+      }
+
       fprintf(fpout, "     <SpectrumIdentificationItem id=\"SII_%d.%d.%d\" rank=\"%d\" chargeState=\"%d\" peptide_ref=\"%s;%s\" experimentalMassToCharge=\"%f\" calculatedMassToCharge=\"%f\" passThreshold=\"false\">\n",
             (*itMzid).iWhichQuery,
-            (*itMzid).iWhichResult + 1,
             (*itMzid).iBatchNum,
+            (*itMzid).iWhichResult + 1,
             (*itMzid).iWhichResult + 1,
             (*itMzid).iCharge,
             (*itMzid).strPeptide.c_str(),
@@ -1404,16 +1404,21 @@ void CometWriteMzIdentML::WriteSpectrumIdentificationList(FILE* fpout,
       fprintf(fpout, "      <cvParam cvRef=\"PSI-MS\" accession=\"MS:1002255\" name=\"Comet:spscore\" value=\"%0.4f\" />\n", (*itMzid).fSp);
       fprintf(fpout, "      <cvParam cvRef=\"PSI-MS\" accession=\"MS:1002256\" name=\"Comet:sprank\" value=\"%d\" />\n", (*itMzid).iRankSp);
       fprintf(fpout, "      <cvParam cvRef=\"PSI-MS\" accession=\"MS:1002257\" name=\"Comet:expectation value\" value=\"%0.2E\" />\n", (*itMzid).dExpect);
-      fprintf(fpout, "      <cvParam cvRef=\"PSI-MS\" accession=\"MS:1002500\" name=\"peptide passes threshold\" value=\"false\" />\n");
+//    fprintf(fpout, "      <cvParam cvRef=\"PSI-MS\" accession=\"MS:1002500\" name=\"peptide passes threshold\" value=\"false\" />\n");
       fprintf(fpout, "     </SpectrumIdentificationItem>\n");
 
-      if ((*itMzid).dRTime > 0.0)
-         fprintf(fpout, "     <cvParam cvRef=\"PSI-MS\" accession=\"MS:1000894\" name=\"retention time\" value=\"%0.4f\" unitCvRef=\"UO\" unitAccession=\"UO:0000010\" unitName=\"second\"/>\n", (*itMzid).dRTime);
 
-      fprintf(fpout, "    </SpectrumIdentificationResult>\n");
+      dPrevRT = (*itMzid).dRTime; // grab retention time of scan to use in next iteration of for loop
 
       lCount++;
    }
+
+   if (dPrevRT > 0.0)
+   {
+      fprintf(fpout, "     <cvParam cvRef=\"PSI-MS\" accession=\"MS:1000894\" name=\"retention time\" value=\"%0.4f\" unitCvRef=\"UO\" unitAccession=\"UO:0000010\" unitName=\"second\"/>\n", dPrevRT);
+   }
+
+   fprintf(fpout, "    </SpectrumIdentificationResult>\n");
 
    time_t tTime;
    char szDate[48];
@@ -1485,7 +1490,7 @@ void CometWriteMzIdentML::PrintTmpPSM(int iWhichQuery,
          fprintf(fpout, "%s\t", pOutput[iWhichResult].szPeptide);
 
          // prev/next AA
-         fprintf(fpout, "%c%c\t", pOutput[iWhichResult].szPrevNextAA[0], pOutput[iWhichResult].szPrevNextAA[1]);
+         fprintf(fpout, "%c%c\t", pOutput[iWhichResult].cPrevAA, pOutput[iWhichResult].cNextAA);
 
          // modifications:  zero-position:mass; semi-colon delimited; length=nterm, length+1=c-term
 

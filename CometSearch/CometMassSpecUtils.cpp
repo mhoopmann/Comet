@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Implementations for generic mass spectrometry related utility functions.
@@ -149,13 +140,13 @@ void CometMassSpecUtils::GetProteinName(FILE *fpdb,
 
       fread(&lSize, sizeof(long), 1, fpdb);
       vector<comet_fileoffset_t> vOffsets;
-      for (long x = 0; x < lSize; ++x)
+      for (long x = 0; x < lSize; ++x) // read file offsets
       {
          comet_fileoffset_t tmpoffset;
          fread(&tmpoffset, sizeof(comet_fileoffset_t), 1, fpdb);
          vOffsets.push_back(tmpoffset);
       }
-      for (long x = 0; x < lSize; ++x)
+      for (long x = 0; x < lSize; ++x) // read name from fasta
       {
          char szTmp[WIDTH_REFERENCE];
          comet_fseek(fpdb, vOffsets.at(x), SEEK_SET);
@@ -237,13 +228,24 @@ void CometMassSpecUtils::GetProteinNameString(FILE *fpdb,
       // get target proteins
       if (iPrintTargetDecoy != 2)  // if not decoy-only
       {
+         vector<string> vTmp;      // store decoy matches here to append at end
+
          comet_fileoffset_t lEntry = pOutput[iWhichResult].lProteinFilePosition;
          for (auto it = g_pvProteinsList.at(lEntry).begin(); it != g_pvProteinsList.at(lEntry).end(); ++it)
          {
             comet_fseek(fpdb, *it, SEEK_SET);
             fscanf(fpdb, "%511s", szProteinName);  // WIDTH_REFERENCE-1
             szProteinName[511] = '\0';
-            vProteinTargets.push_back(szProteinName);
+
+            if (!strncmp(szProteinName, g_staticParams.szDecoyPrefix, iLenDecoyPrefix))
+               vTmp.push_back(szProteinName);
+            else
+               vProteinTargets.push_back(szProteinName);
+         }
+
+         if (vTmp.size() > 0)      // append any decoy matches now
+         {
+            vProteinTargets.insert(vProteinTargets.end(), vTmp.begin(), vTmp.end());
          }
       }
 

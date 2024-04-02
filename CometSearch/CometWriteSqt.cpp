@@ -1,26 +1,17 @@
-/*
-MIT License
+// Copyright 2023 Jimmy Eng
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Copyright (c) 2023 University of Washington's Proteomics Resource
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 
 #include "Common.h"
 #include "CometDataInternal.h"
@@ -188,19 +179,16 @@ void CometWriteSqt::PrintResults(int iWhichQuery,
 
    Results *pOutput;
 
-   float fLowestScore;
    unsigned long uliNumMatched;
 
    if (iPrintTargetDecoy == 2)
    {
-      fLowestScore = pQuery->fLowestDecoySpScore;
       uliNumMatched = pQuery->_uliNumMatchedDecoyPeptides;
       iNumPrintLines = pQuery->iDecoyMatchPeptideCount;
       pOutput = pQuery->_pDecoys;
    }
    else
    {
-      fLowestScore = pQuery->fLowestSpScore;
       uliNumMatched = pQuery->_uliNumMatchedPeptides;
       iNumPrintLines = pQuery->iMatchPeptideCount;
       pOutput = pQuery->_pResults;
@@ -214,7 +202,7 @@ void CometWriteSqt::PrintResults(int iWhichQuery,
          g_staticParams.szHostName,
          pQuery->_pepMassInfo.dExpPepMass,
          pQuery->_spectrumInfoInternal.dTotalIntensity,
-         fLowestScore,
+         0.0,  // meant to be lowest Sp score; no longer relevant with fast xcorr
          uliNumMatched);
 
    if (g_staticParams.options.bOutputSqtStream)
@@ -280,7 +268,7 @@ void CometWriteSqt::PrintSqtLine(int iWhichQuery,
    }
 
    // generate modified_peptide string
-   sprintf(szBuf+strlen(szBuf), "%c.", pOutput[iWhichResult].szPrevNextAA[0]);
+   sprintf(szBuf+strlen(szBuf), "%c.", pOutput[iWhichResult].cPrevAA);
    if (g_staticParams.iOldModsEncoding)
    {
       if (bNterm)
@@ -325,7 +313,7 @@ void CometWriteSqt::PrintSqtLine(int iWhichQuery,
       if (bCterm)
          sprintf(szBuf+strlen(szBuf), "c[%0.4f]", dCterm);
    }
-   sprintf(szBuf+strlen(szBuf), ".%c", pOutput[iWhichResult].szPrevNextAA[1]);
+   sprintf(szBuf+strlen(szBuf), ".%c", pOutput[iWhichResult].cNextAA);
 
    if (g_staticParams.options.bOutputSqtStream)
       fprintf(stdout, "%s\tU\n", szBuf);
